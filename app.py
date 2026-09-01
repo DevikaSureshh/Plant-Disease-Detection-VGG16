@@ -1,120 +1,214 @@
+```python
 import streamlit as st
 import tensorflow as tf
 import numpy as np
+import json
 from PIL import Image
-import os
 
-# -----------------------------
-# Page configuration
-# -----------------------------
+from tensorflow.keras.applications.vgg16 import preprocess_input
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
+
 st.set_page_config(
     page_title="Plant Disease Detection",
     page_icon="🌿",
     layout="centered"
 )
 
-# -----------------------------
-# Title
-# -----------------------------
-st.title("🌿 Plant Disease Detection")
-st.write("Upload a plant leaf image to detect its disease using VGG16.")
 
-# -----------------------------
-# Model path
-# -----------------------------
-MODEL_PATH = "best_vgg16_model.keras"
+# ============================================================
+# LOAD MODEL
+# ============================================================
 
-# -----------------------------
-# Load model
-# -----------------------------
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model(MODEL_PATH)
 
-# -----------------------------
-# Disease classes
-# IMPORTANT:
-# Replace these with the exact
-# class_names from your notebook.
-# -----------------------------
-class_names = [
-    "Apple___Apple_scab",
-    "Apple___Black_rot",
-    "Apple___Cedar_apple_rust",
-    "Apple___healthy",
-    "Corn___Cercospora_leaf_spot",
-    "Corn___Common_rust",
-    "Corn___Northern_Leaf_Blight",
-    "Corn___healthy",
-    "Grape___Black_rot",
-    "Grape___Esca",
-    "Grape___Leaf_blight",
-    "Grape___healthy",
-    "Potato___Early_blight",
-    "Potato___Late_blight",
-    "Potato___healthy",
-    "Tomato___Bacterial_spot",
-    "Tomato___Early_blight",
-    "Tomato___Late_blight",
-    "Tomato___Leaf_Mold",
-    "Tomato___Septoria_leaf_spot",
-    "Tomato___Spider_mites",
-    "Tomato___Target_Spot",
-    "Tomato___Yellow_Leaf_Curl_Virus",
-    "Tomato___mosaic_virus",
-    "Tomato___healthy"
-]
+    model = tf.keras.models.load_model(
+        "plant_disease_vgg16.keras"
+    )
 
-# -----------------------------
-# Upload image
-# -----------------------------
+    return model
+
+
+# ============================================================
+# LOAD CLASS NAMES
+# ============================================================
+
+@st.cache_data
+def load_class_names():
+
+    with open("class_names.json", "r") as f:
+        class_names = json.load(f)
+
+    return class_names
+
+
+model = load_model()
+class_names = load_class_names()
+
+
+# ============================================================
+# PAGE TITLE
+# ============================================================
+
+st.title("🌿 Plant Disease Detection")
+
+st.write(
+    "Upload a plant leaf image and the VGG16 model "
+    "will predict the most likely disease."
+)
+
+
+# ============================================================
+# IMAGE UPLOAD
+# ============================================================
+
 uploaded_file = st.file_uploader(
-    "Upload a plant leaf image",
+    "Upload a leaf image",
     type=["jpg", "jpeg", "png"]
 )
 
+
+# ============================================================
+# PREDICTION
+# ============================================================
+
 if uploaded_file is not None:
 
+    # Open uploaded image
     image = Image.open(uploaded_file).convert("RGB")
 
+    # Display image
     st.image(
         image,
         caption="Uploaded Image",
         use_container_width=True
     )
 
-    if st.button("🔍 Predict Disease"):
+    # Prediction button
+    if st.button(
+        "Predict Disease",
+        type="primary"
+    ):
 
-        try:
-            model = load_model()
+        with st.spinner("Analyzing image..."):
 
+            # ------------------------------------------------
             # Resize image to VGG16 input size
-            image_resized = image.resize((224, 224))
+            # ------------------------------------------------
 
-            # Convert image to numpy array
-            image_array = np.array(image_resized)
+            image_resized = image.resize(
+                (224, 224)
+            )
 
-            # Normalize pixel values
-            image_array = image_array / 255.0
+            # ------------------------------------------------
+            # Convert PIL image → NumPy array
+            # ------------------------------------------------
 
+            image_array = np.array(
+                image_resized
+            )
+
+            # ------------------------------------------------
             # Add batch dimension
-            image_array = np.expand_dims(image_array, axis=0)
+            #
+            # Before:
+            # (224, 224, 3)
+            #
+            # After:
+            # (1, 224, 224, 3)
+            # ------------------------------------------------
 
-            # Prediction
-            predictions = model.predict(image_array)
+            image_array = np.expand_dims(
+                image_array,
+                axis=0
+            )
 
-            predicted_index = np.argmax(predictions[0])
-            confidence = float(np.max(predictions[0])) * 100
+            # ------------------------------------------------
+            # VGG16 preprocessing
+            # ------------------------------------------------
 
-            predicted_class = class_names[predicted_index]
+            image_array = preprocess_input(
+                image_array.astype(np.float32)
+            )
 
-            # Display result
-            st.success("Prediction completed!")
+            # ------------------------------------------------
+            # Model prediction
+            # ------------------------------------------------
 
-            st.subheader("🌱 Prediction")
-            st.write(f"**Disease:** {predicted_class}")
+            predictions = model.predict(
+                image_array,
+                verbose=0
+            )
 
-            st.write(f"**Confidence:** {confidence:.2f}%")
+            # ------------------------------------------------
+            # Get predicted class
+            # ------------------------------------------------
 
-        except Exception as e:
-            st.error(f"Error loading or predicting with the model: {e}")
+            predicted_index = np.argmax(
+                predictions[0]
+            )
+
+            predicted_class = class_names[
+                predicted_index
+            ]
+
+            confidence = predictions[0][
+                predicted_index
+            ]
+
+
+        # ====================================================
+        # DISPLAY RESULT
+        # ====================================================
+
+        st.success(
+            f"Prediction: {predicted_class}"
+        )
+
+        st.metric(
+            "Confidence",
+            f"{confidence * 100:.2f}%"
+        )
+
+
+        # ====================================================
+        # TOP 5 PREDICTIONS
+        # ====================================================
+
+        st.subheader("Top Predictions")
+
+        top_indices = np.argsort(
+            predictions[0]
+        )[::-1][:5]
+
+        for index in top_indices:
+
+            class_name = class_names[index]
+
+            probability = predictions[0][index]
+
+            st.write(
+                f"**{class_name}** — "
+                f"{probability * 100:.2f}%"
+            )
+
+            st.progress(
+                float(probability)
+            )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "Model: VGG16 Transfer Learning | "
+    "Dataset: PlantVillage"
+)
+```
